@@ -1,38 +1,37 @@
 """routers/trigger.py — Manually fire any ingestion job via HTTP POST"""
 import logging
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException
 
-from scheduler import trigger_job
+from orchestrator import orchestrate_tier
 
 router = APIRouter(prefix="/trigger", tags=["Trigger"])
 logger = logging.getLogger(__name__)
 
-VALID_SOURCES = [
-    "free_apis_parallel", "github_sources_parallel", "ats_companies",
-    "company_backfill", "company_news", "company_enrich",
-    "rss_news", "industry_dive", "industry_dive_topics",
-    
-    # Individual provider stubs
-    "remotive", "arbeitnow", "adzuna", "jobicy", "themuse", "himalayas", "jooble",
-    "reddit", "eventbrite", "simplify", "pittcsc", "everjobs",
-]
+VALID_TIERS = {"hot", "warm", "cold", "archive"}
 
-
-@router.post("/{source}")
-def trigger(source: str, background_tasks: BackgroundTasks):
+@router.post("/tier/{tier_name}")
+def trigger_tier(tier_name: str):
     """
-    Manually trigger an ingestion job by source name.
+    Cloud Scheduler hits this endpoint to evaluate and queue a tier of scrapers.
+    It does not scrape synchronously. It pushes tasks to Pub/Sub.
     """
-    if source not in VALID_SOURCES:
+    tier_name = tier_name.lower()
+    if tier_name not in VALID_TIERS:
         raise HTTPException(
             status_code=422,
-            detail=f"Unknown source '{source}'. Valid options: {VALID_SOURCES}",
+            detail=f"Unknown tier '{tier_name}'. Valid options: {VALID_TIERS}",
         )
-    background_tasks.add_task(trigger_job, source)
-    logger.info("Manual trigger: %s", source)
-    return {"triggered": source, "status": "queued"}
+        
+    logger.info("Triggering orchestration for tier: %s", tier_name)
+    
+    try:
+        result = orchestrate_tier(tier_name)
+        return result
+    except Exception as e:
+        logger.error("Error orchestrating tier %s: %s", tier_name, str(e))
+        raise HTTPException(status_code=500, detail=f"Orchestration error: {str(e)}")
 
 
 @router.get("/")
 def list_sources():
-    return {"sources": VALID_SOURCES}
+    return {"sources": list(VALID_TIERS)}

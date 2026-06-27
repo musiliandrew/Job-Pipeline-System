@@ -20,12 +20,19 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from scheduler import start_scheduler, stop_scheduler
-    logger.info("Starting Data Ingestion System scheduler...")
-    start_scheduler()
-    yield
-    logger.info("Shutting down scheduler...")
-    stop_scheduler()
+    import os
+    env = os.getenv("ENVIRONMENT", "development").lower()
+    
+    if env != "production":
+        from scheduler import start_scheduler, stop_scheduler
+        logger.info("Local Development: Starting internal APScheduler...")
+        start_scheduler()
+        yield
+        logger.info("Shutting down scheduler...")
+        stop_scheduler()
+    else:
+        logger.info("Production Mode: Internal scheduler disabled. Awaiting Cloud Scheduler triggers.")
+        yield
 
 
 app = FastAPI(
@@ -41,6 +48,7 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(trigger.router)
+app.include_router(worker.router)
 app.include_router(status.router)
 app.include_router(logs.router)
 

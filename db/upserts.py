@@ -6,8 +6,10 @@ import uuid
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+import hashlib
 
 import psycopg2.extras
+from events.bus import event_bus
 
 
 def _now() -> datetime:
@@ -38,6 +40,54 @@ def upsert_source(conn, name: str, base_url: str) -> int:
             (name[:50], base_url, _now()),
         )
         return cur.fetchone()[0]
+
+
+def get_scrape_metadata(conn, source_id: int) -> Dict[str, Any]:
+    """Retrieve operational metadata for a job source to support incremental scraping."""
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT tier, last_successful_scrape, last_job_id_seen, 
+                   etag, average_update_frequency
+            FROM scrape_metadata
+            WHERE source_id = %s
+            """,
+            (source_id,)
+        )
+        row = cur.fetchone()
+        return dict(row) if row else {}
+
+
+def update_scrape_metadata(conn, source_id: int, updates: Dict[str, Any]) -> None:
+    """Update checkpoints for adaptive scheduling."""
+    if not updates:
+        return
+        
+    allowed = {"tier", "last_successful_scrape", "last_job_id_seen", "etag", "jobs_found_last_run"}
+    valid_updates = {k: v for k, v in updates.items() if k in allowed}
+    
+    if not valid_updates:
+        return
+        
+    # Generate ON CONFLICT DO UPDATE SET string dynamically
+    set_parts = [f"{k} = EXCLUDED.{k}" for k in valid_updates.keys()]
+    set_parts.append("updated_at = EXCLUDED.updated_at")
+    
+    # We must insert a new uuid if the row doesn't exist yet
+    columns = ["id", "source_id", "updated_at"] + list(valid_updates.keys())
+    values = [str(uuid.uuid4()), source_id, _now()] + list(valid_updates.values())
+    
+    placeholders = ", ".join(["%s"] * len(columns))
+    
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO scrape_metadata ({', '.join(columns)})
+            VALUES ({placeholders})
+            ON CONFLICT (source_id) DO UPDATE SET {', '.join(set_parts)}
+            """,
+            values
+        )
 
 
 # ─── Companies ────────────────────────────────────────────────────────────────
@@ -158,12 +208,16 @@ def upsert_job(
     skills_arr = skills or []
     tech_arr = technologies or []
     cats_arr = categories or []
+    
+    # Generate deterministic deduplication hash
+    hash_input = f"{external_url}{company_id}{title}".encode("utf-8")
+    job_hash = hashlib.sha256(hash_input).hexdigest()
 
     with conn.cursor() as cur:
         # Check if exists
         cur.execute(
-            "SELECT id FROM jobs WHERE external_id = %s AND source_id = %s",
-            (external_id[:255], source_id),
+            "SELECT id FROM jobs WHERE job_hash = %s OR (external_id = %s AND source_id = %s)",
+            (job_hash, external_id[:255], source_id),
         )
         row = cur.fetchone()
 
@@ -189,8 +243,8 @@ def upsert_job(
                     status = 'active',
                     source_updated_at = %s, last_verified_at = %s,
                     freshness_score = %s, is_fresh = %s, last_freshness_update = %s,
-                    updated_at = %s
-                WHERE external_id = %s AND source_id = %s
+                    updated_at = %s, job_hash = %s
+                WHERE id = %s
                 """,
                 (
                     company_id, location_id, title[:255], slug,
@@ -199,8 +253,8 @@ def upsert_job(
                     salary_period, is_remote, is_hybrid, experience_level,
                     cats_arr, tech_arr, expires_at,
                     psycopg2.extras.Json(parsed_metadata) if parsed_metadata else None,
-                    now, now, freshness, fresh, now, now,
-                    external_id[:255], source_id,
+                    now, now, freshness, fresh, now, now, job_hash,
+                    row[0],
                 ),
             )
             return "updated"
@@ -217,7 +271,7 @@ def upsert_job(
                     expires_at, parsed_metadata, raw_data,
                     status, posted_at, source_updated_at, ingested_at,
                     last_verified_at, freshness_score, is_fresh,
-                    last_freshness_update, created_at, updated_at
+                    last_freshness_update, created_at, updated_at, job_hash
                 ) VALUES (
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
@@ -227,7 +281,7 @@ def upsert_job(
                     %s, %s::jsonb, %s::jsonb,
                     'active', %s, %s, %s,
                     %s, %s, %s,
-                    %s, %s, %s
+                    %s, %s, %s, %s
                 )
                 """,
                 (
@@ -241,9 +295,32 @@ def upsert_job(
                     psycopg2.extras.Json(raw_data) if raw_data else None,
                     posted_at, now, now,
                     now, freshness, fresh,
-                    now, now, now,
+                    now, now, now, job_hash,
                 ),
             )
+            
+            # Event-Driven Publication: Transactional Outbox Pattern
+            # Insert into outbox_events within the SAME database transaction.
+            outbox_id = str(uuid.uuid4())
+            cur.execute(
+                """
+                INSERT INTO outbox_events (id, topic, event_type, payload)
+                VALUES (%s, %s, %s, %s::jsonb)
+                """,
+                (
+                    outbox_id,
+                    "raw-jobs",
+                    "job_created",
+                    psycopg2.extras.Json({
+                        "job_id": job_id,
+                        "title": title,
+                        "description": description,
+                        "company_id": company_id,
+                        "external_url": external_url
+                    })
+                )
+            )
+            
             return "created"
 
 
