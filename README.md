@@ -1,19 +1,19 @@
-# CareerScoper Data Ingestion System
+# Distributed Data Ingestion System
 
-The Data Ingestion System is a **standalone, high-throughput web scraping and ETL microservice**. It is responsible for gathering raw data from external sources (Adzuna, Jooble, Eventbrite, Reddit, Company ATS pages, and Gmail), parsing it, and inserting it directly into a PostgreSQL database.
+A **standalone, high-throughput web scraping and ETL microservice**. It is responsible for gathering raw unstructured data from external sources (job boards, ATS platforms, news APIs, and emails), parsing it, and streaming it directly into a PostgreSQL database.
 
-It is built with **FastAPI** and uses **APScheduler** (for local development) and **Google Cloud Tasks/Scheduler** (for production orchestration).
+Built with **FastAPI** and uses **APScheduler** (for local development) and **Google Cloud Tasks/Scheduler** (for production serverless orchestration).
 
 ## Architecture Overview
-This microservice operates completely independently of the CareerScoper API. It does not rely on Django ORM or any of the monolith's business logic.
+This microservice operates completely independently of any specific business logic or heavy ORM abstractions. 
 
-1. **Direct DB Access:** Uses a raw `psycopg2` ThreadedConnectionPool for maximum write throughput, bypassing heavy ORM abstractions.
-2. **Serverless Orchestration:** Exposes HTTP endpoints (`/trigger/tier/{tier_name}` and `/worker/consume`) designed to be hit by Google Cloud Scheduler or Cloud Tasks, allowing the microservice to scale down to zero when idle.
-3. **Resilient Scraping:** Handles API rate limits, XML parsing, and unstructured text extraction asynchronously.
+1. **Direct DB Access:** Uses a raw `psycopg2` ThreadedConnectionPool for maximum write throughput, avoiding the overhead of heavy frameworks like Django/SQLAlchemy ORMs.
+2. **Serverless Orchestration:** Exposes generic HTTP endpoints designed to be triggered by Google Cloud Scheduler or Cloud Tasks, allowing the service to scale dynamically and scale down to zero when idle.
+3. **Resilient Scraping:** Handles API rate limits, XML/HTML parsing, and unstructured text extraction asynchronously.
 
-## Running Locally (Standalone)
+## Running Locally
 
-You can run this service entirely on its own to populate a database.
+You can run this service entirely on its own to execute scraping pipelines.
 
 1. Create a virtual environment: `python -m venv env`
 2. Activate it: `source env/bin/activate`
@@ -27,11 +27,11 @@ You can run this service entirely on its own to populate a database.
    uvicorn main:app --reload --port 8001
    ```
 
-*Note: In local development, an internal `APScheduler` starts automatically to run periodic scrapes. In production, this scheduler disables itself to allow Google Cloud Scheduler to handle execution.*
+*Note: In local development, an internal `APScheduler` starts automatically to run periodic scrape jobs. In production, this scheduler disables itself to allow external cloud event triggers.*
 
 ## API Endpoints
 
 - **`GET /health`**: Health check.
 - **`GET /status`**: View the status of the connection pool and ingestion metrics.
 - **`POST /trigger/tier/{tier_name}`**: Manually trigger a scrape orchestration tier (e.g., `hot`, `warm`, `cold`).
-- **`POST /worker/consume`**: Execute a specific scrape job (Expects a Google Cloud Task JSON payload).
+- **`POST /worker/consume`**: Execute a specific scrape job (Expects a generic JSON payload detailing the target source).
