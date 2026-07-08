@@ -12,8 +12,8 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install dependencies securely and keep the image small
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=1000 --retries=10 --upgrade pip && \
+    pip install --no-cache-dir --default-timeout=1000 --retries=10 -r requirements.txt
 
 # Copy the rest of the application code
 COPY . .

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI
-from routers import health, trigger, status, logs
+from routers import health, trigger, status, logs, worker, companies
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +51,7 @@ app.include_router(trigger.router)
 app.include_router(worker.router)
 app.include_router(status.router)
 app.include_router(logs.router)
+app.include_router(companies.router)
 
 
 @app.get("/", tags=["Root"])
