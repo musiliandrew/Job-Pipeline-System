@@ -205,9 +205,15 @@ def upsert_job(
     posted_at = posted_at or now
     freshness, fresh = _freshness_score(posted_at)
     slug = title[:255]
-    skills_arr = skills or []
-    tech_arr = technologies or []
-    cats_arr = categories or []
+    skills_arr = [str(s)[:100] for s in (skills or []) if s]
+    tech_arr = [str(t)[:100] for t in (technologies or []) if t]
+    cats_arr = [str(c)[:100] for c in (categories or []) if c]
+    
+    # Safely truncate fields with strict length limits
+    work_type = str(work_type)[:20] if work_type else None
+    experience_level = str(experience_level)[:20] if experience_level else None
+    salary_period = str(salary_period)[:20] if salary_period else None
+    salary_currency = str(salary_currency)[:3].upper() if salary_currency else None
     
     # Generate deterministic deduplication hash
     hash_input = f"{external_url}{company_id}{title}".encode("utf-8")

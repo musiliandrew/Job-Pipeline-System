@@ -6,10 +6,11 @@ from typing import Any, Dict, List
 import requests
 
 from common.http import polite_delay
+from common.ai_enricher import classify_and_enrich_post
 from jobs.filters import reddit_is_job_listing, extract_skills, detect_work_type, is_relevant_role
 
 NAME          = "reddit"
-DEFAULT_SUBS  = os.getenv("REDDIT_SUBREDDITS", "forhire,remotejobs,cscareerquestionsjobs").split(",")
+DEFAULT_SUBS  = os.getenv("REDDIT_SUBREDDITS", "hiring,jobbit,remotejobs,forhire").split(",")
 OAUTH_URL     = "https://www.reddit.com/api/v1/access_token"
 BASE_OAUTH_API = "https://oauth.reddit.com"
 
@@ -59,26 +60,30 @@ def _fetch_sub(sub: str, token: str, limit: int) -> List[Dict[str, Any]]:
                     posted_at = datetime.fromtimestamp(created_utc, tz=timezone.utc)
                 except Exception:
                     posted_at = _now()
-            if not reddit_is_job_listing(title, body):
+            # Try Gemini 2.5 Flash AI classification or regex filter
+            ai_data = None
+            if "[hiring]" in title.lower() or "hiring" in title.lower():
+                ai_data = classify_and_enrich_post(title, body)
+            
+            if not ai_data and not reddit_is_job_listing(title, body):
                 continue
+                
             text = f"{title}\n{body}"
             pre: Dict[str, Any] = {
-                "title":         title,
-                "company_name":  (d.get("author") or "Unknown Company"),
-                "location_text": "Remote" if "remote" in text.lower() else "",
-                "description":   body[:4000],
+                "title":         (ai_data.get("clean_title") if ai_data else title),
+                "company_name":  (ai_data.get("company_name") if ai_data else (d.get("author") or "Unknown Company")),
+                "location_text": "Remote" if (ai_data and ai_data.get("is_remote")) or "remote" in text.lower() else "",
+                "description":   body[:4000] if body else title,
                 "posted_at":     posted_at,
                 "external_url":  link,
                 "external_id":   str(pid),
-                "salary_formatted": "Not specified",
-                "skills":        extract_skills(text),
+                "salary_formatted": (ai_data.get("salary_formatted") if ai_data else "Not specified"),
+                "skills":        (ai_data.get("skills") if ai_data else extract_skills(text)),
                 "work_type":     detect_work_type(text),
             }
-            if not is_relevant_role(text):
-                continue
             out.append(pre)
         return out
-    except Exception:
+    except Exception as e:
         return []
 
 

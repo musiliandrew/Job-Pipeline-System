@@ -24,4 +24,4 @@ EXPOSE 8001
 # Command to run the FastAPI application with Uvicorn
 # The --timeout-keep-alive configures Uvicorn for longer running synchronous endpoints
 # typical of Cloud Run environments behind load balancers.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--timeout-keep-alive", "60"]
+CMD exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8001} --timeout-keep-alive 60

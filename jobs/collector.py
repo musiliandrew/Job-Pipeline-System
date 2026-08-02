@@ -99,6 +99,9 @@ def collect_provider(provider: str, query: str = DEFAULT_QUERY, limit: int = 40)
             source_id = upsert_source(conn, provider, meta["base_url"])
             for raw in items:
                 try:
+                    with conn.cursor() as cur:
+                        cur.execute("SAVEPOINT job_insert")
+                    
                     unified     = normalize_unified(provider, raw)
                     company_id  = upsert_company(conn, unified["company_name"])
                     location_id = upsert_location(conn, unified["location_text"])
@@ -119,6 +122,10 @@ def collect_provider(provider: str, query: str = DEFAULT_QUERY, limit: int = 40)
                         posted_at    = unified.get("posted_at"),
                         parsed_metadata={"salary_formatted": unified.get("salary_formatted")},
                     )
+                    
+                    with conn.cursor() as cur:
+                        cur.execute("RELEASE SAVEPOINT job_insert")
+                        
                     if status == "created":
                         created += 1
                     elif status == "updated":
@@ -126,6 +133,8 @@ def collect_provider(provider: str, query: str = DEFAULT_QUERY, limit: int = 40)
                     else:
                         skipped += 1
                 except Exception as e:
+                    with conn.cursor() as cur:
+                        cur.execute("ROLLBACK TO SAVEPOINT job_insert")
                     errors.append(str(e))
                     skipped += 1
 

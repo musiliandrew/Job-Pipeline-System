@@ -68,7 +68,7 @@ def ingest_industry_dive(
         r    = requests.get(endpoint, params=params, timeout=20)
         r.raise_for_status()
         data  = r.json() or {}
-        items = data.get("articles") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        items = (data.get("article_set") or data.get("articles")) if isinstance(data, dict) else (data if isinstance(data, list) else [])
         norm  = [n for raw in (items or []) if (n := _normalize_item(raw))]
         with DBConn() as conn:
             for it in norm:
@@ -108,7 +108,7 @@ def industry_dive_preview(
         endpoint = trimmed if trimmed.endswith("/articles") else trimmed + "/articles"
         r     = requests.get(endpoint, params=params, timeout=20)
         data  = r.json() or {}
-        items = data.get("articles") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        items = (data.get("article_set") or data.get("articles")) if isinstance(data, dict) else (data if isinstance(data, list) else [])
         sample = [(it.get("title") or it.get("headline") or "")[:200] for it in items[:5] if it.get("title") or it.get("headline")]
         return {"status_code": r.status_code, "count": len(items), "sample": sample}
     except Exception as e:
